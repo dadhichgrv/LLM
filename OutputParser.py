@@ -6,11 +6,11 @@ from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
 
 # Set token provider
 token_provider = get_bearer_token_provider(
-  DefaultAzureCredential(),"https://cognitiveservices.azure.com/.default")
+  DefaultAzureCredential(),"....service....")
 
-llm = AzureChatOpenAI(model="gpt4",
-                      api_version = "2024-02-15-preview",
-                      azure_endpoint = "https://turingoaigpt4.openai.azure.com/",
+llm = AzureChatOpenAI(model="...model...",
+                      api_version = "...version...",
+                      azure_endpoint = "...endpoint....",
                       azure_ad_token_provider = token_provider)
 
 # You can output the response in specific output format
