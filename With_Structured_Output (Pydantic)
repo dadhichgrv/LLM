@@ -1,0 +1,25 @@
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+
+# list[str] means we want output to be list of string
+# Optional means we want output to be optional
+# Literal means we want output to be one of the value that we have defined like positive or negative and not anything else
+# pydantic helps with with data validation and is mostly used with OpenAI models while creating Agents
+
+class Review(BaseModel):
+  summary   : list[str] = Field(description="Give one line summary of the review")
+  sentiment : Literal["positive","negative"] = Field(description="Give positive or negative sentiment of the review.")
+  topic     : list[str] = Field(description="Give the topic of the review")
+  pros      : Optional[list[str]] = Field(default = None, description="Give the pros of the product")
+  cons      : Optional[list[str]] = Field(default = None, description="Give the cons of the product")
+
+structured_output = client.with_structured_output(Review)
+
+result = structured_output.invoke("""The speakers are good quality but they do not connect via bluetooth. At this price range, there are better options available but their bass quality is good. """)
+
+
+print("Summary :",result.summary)
+print("Sentiment :",result.sentiment)
+print("Topic :",result.topic)
+print("Pros :",result.pros)
+print("Cons :",result.cons)
