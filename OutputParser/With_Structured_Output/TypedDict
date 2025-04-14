@@ -1,0 +1,27 @@
+from typing import TypedDict, Annotated, Optional, Literal
+
+# Annotated will help you give description of the key so that there is no ambiguity like for topic we have Give the topic of the review
+# list[str] means we want output to be list of string
+# Optional means we want output to be optional
+# Literal means we want output to be one of the value that we have defined like positive or negative and not anything else
+
+
+# There is no data validation on case of TypedDict. The LLM may or may not give str as output in some cases. So if we need to validate the output, we will then use Pydantic
+
+class Review(TypedDict):
+  summary : Annotated[str,"Give one line summary of the review"]
+  sentiment : Annotated[Literal["positive","negative"],"Give positive or negative sentiment of the review. "]
+  topic : Annotated[list[str],"Give the topic of the review"]
+  pros : Annotated[Optional[list[str]],"Give the pros of the product"]
+  cons : Annotated[Optional[list[str]],"Give the cons of the product"]
+
+structured_output = client.with_structured_output(Review)
+
+result = structured_output.invoke("""The speakers are good quality but they do not connect via bluetooth. At this price range, there are better options available but their bass quality is good. """)
+
+
+print("Summary :",result['summary'])
+print("Sentiment :",result['sentiment'])
+print("Topic :",result['topic'])
+print("Pros :",result['pros'])
+print("Cons :",result['cons'])
