@@ -1,0 +1,21 @@
+# PydanticOutputParser
+
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, Field
+
+class Person(BaseModel):
+  name : str = Field(description="The person's name"),
+  age : int = Field(description="The person's age", gt=18),
+  salary : float = Field(description="The person's salary")
+
+parser = PydanticOutputParser(pydantic_object=Person)
+
+template = PromptTemplate(input_variables=["place"],
+                          template = "Give name, age and salary of fictional {place} person \n {format_instructions}",
+                          partial_variables = {"format_instructions":parser.get_format_instructions()}
+                          )
+
+chain = template | client | parser
+
+print(chain.invoke({"place":"China"}))
