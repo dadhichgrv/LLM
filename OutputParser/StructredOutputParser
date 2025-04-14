@@ -1,0 +1,22 @@
+# StructuredOutputParser
+
+# This will help you create schema in which you want the output
+
+from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+from langchain_core.prompts import PromptTemplate
+
+response_schemas = [
+  ResponseSchema(name="Fact1", description="Fact1 about topic"),
+  ResponseSchema(name="Fact2", description="Fact2 about topic"),
+  ResponseSchema(name="Fact3", description="Fact3 about topic")
+]
+
+output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+
+prompt1 = PromptTemplate(input_variables=["topic"], 
+                           template="Write 3 facts on {topic} \n {format_instructions}",
+                           partial_variables = {'format_instructions':output_parser.get_format_instructions()})
+
+chain =  prompt1 | client | output_parser
+
+print(chain.invoke({"topic":"Agents in AI"}))
