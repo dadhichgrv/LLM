@@ -1,0 +1,35 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
+from langchain_core.runnables import RunnableParallel, RunnableBranch, RunnableLambda
+from pydantic import BaseModel, Field
+from typing import Literal
+
+# Using Pydantic Output Parser so that we can be sure that output sentiment is either positive or negative and nothing else (data validation by Pydantic)
+class Feedback(BaseModel):
+  sentiment: Literal['positive','negative',"neutral"] = Field(description="Give sentiment of the feedback")
+
+parser = StrOutputParser()
+output_parser = PydanticOutputParser(pydantic_object=Feedback)  
+
+
+prompt1 = PromptTemplate(input_variables=["feedback"], 
+                         template="Give sentiment as positive or negative or neutral for {feedback} \n {format_instruction}",
+                         partial_variables = {"format_instruction":output_parser.get_format_instructions()} )
+
+# Two chains like if else
+prompt2 = PromptTemplate(input_variables=["feedback"], template="Give appropriate response for positive feedback {feedback}")
+prompt3 = PromptTemplate(input_variables=["feedback"], template="Give appropriate response for feedback {feedback}")
+
+classifier_chain = prompt1 | client | output_parser
+
+# We send multiple tuples depending on how many conditions you have
+# If positive condition executes then take that chain else other chain 
+branch_chain = RunnableBranch(
+                            (lambda x:x.sentiment=="positive", prompt2 | client | parser), # Execute this chain if positive
+                            (lambda x:x.sentiment=="negative", prompt3 | client | parser), # Execute this chain if negative
+                            RunnableLambda(lambda x:"could not find sentiment") # Execute this chain for else scenario , since "could not find sentiment is string and not chain we are converting it to chain using RunnableLambda"
+                              )
+
+chain = classifier_chain | branch_chain
+
+print(chain.invoke({"feedback":"The bass quality is good "}))
