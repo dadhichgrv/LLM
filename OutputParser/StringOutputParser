@@ -1,0 +1,15 @@
+# With String Output Parser
+
+# Here template1 goes into template2
+
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+template1 = PromptTemplate(input_variables=["topic"], template="Write a short paragraph on {topic}")
+template2 = PromptTemplate(input_variables=["text"], template="Give 5 bullet points on {text}")
+
+parser = StrOutputParser()
+
+chain = template1 | client | parser | template2 | client | parser
+
+print(chain.invoke({"topic":"Agents in AI"}))
