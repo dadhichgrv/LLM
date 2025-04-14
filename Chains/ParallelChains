@@ -1,0 +1,22 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableParallel
+
+prompt1 = PromptTemplate(input_variables=["topic"], template="Give me a short summary of {topic}")
+prompt2 = PromptTemplate(input_variables=["topic"], template="Generate 5 MCQ from {topic}")
+prompt3 = PromptTemplate(input_variables=["summary","mcq"], template="Merge summary and mcq into single document \n summary is {summary} and mcq is {mcq} ")
+
+output_parser = StrOutputParser()
+
+chain1 = prompt1 | client | output_parser
+chain2 = prompt2 | client | output_parser
+
+parallel_chain = RunnableParallel({"summary":chain1,"mcq":chain2})  # These 2 chains are running parallel
+
+merge_chain = prompt3 | client | output_parser 
+
+chain = parallel_chain | merge_chain   # Finally combine that parallel chain with merged chain
+
+result = chain.invoke({"topic":"India"})
+
+print(result)
