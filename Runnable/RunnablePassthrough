@@ -1,0 +1,22 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain.schema.runnable import RunnableSequence, RunnableParallel, RunnablePassthrough
+
+prompt1 = PromptTemplate(input_variables=["topic"], template="Write a joke on {topic}")
+prompt2 = PromptTemplate(input_variables=["text"], template="Write the joke {text} and Explain the joke {text}")
+
+parser = StrOutputParser()
+
+joke_chain = RunnableSequence(prompt1,client,parser)
+
+parallel_chain = RunnableParallel({"joke":RunnablePassthrough(),
+                                   "explain":prompt2 | client | parser})
+
+final_chain = RunnableSequence(joke_chain,parallel_chain)
+
+print(final_chain.invoke({"topic":"India"}))
+
+# First get the joke through joke_chain then it will have 2 branches (parallel chain)
+# One will print the joke through Runnablepassthrough
+# second will generate explainatio of the joke
+# final_chain will connect both the chains
