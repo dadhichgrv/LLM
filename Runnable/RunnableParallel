@@ -1,0 +1,14 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain.schema.runnable import RunnableSequence, RunnableParallel
+
+prompt1 = PromptTemplate(input_variables=["topic"], template="Write a tweet on {topic}")
+prompt2 = PromptTemplate(input_variables=["topic"], template="Write a linkedin post on {topic}")
+
+parser = StrOutputParser()
+
+paraller_chain = RunnableParallel({"tweet":prompt1 | client | parser,
+                                   "post" :prompt2 | client | parser})
+
+print(paraller_chain.invoke({"topic":"India"}))  
+# Here you will get dictionary and you can extract any component if you want
