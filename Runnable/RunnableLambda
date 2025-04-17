@@ -1,0 +1,20 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain.schema.runnable import RunnableSequence, RunnableParallel, RunnablePassthrough, RunnableLambda
+
+prompt1 = PromptTemplate(input_variables=["topic"], template="Write a joke on {topic}")
+prompt2 = PromptTemplate(input_variables=["text"], template="Write the joke {text} and Explain the joke {text}")
+
+parser = StrOutputParser()
+
+def count_words(text):
+  return len(text.split())
+
+joke_chain = RunnableSequence(prompt1,client,parser)
+parallel_chain = RunnableParallel({"joke":RunnablePassthrough(),
+                                   "word_count":RunnableLambda(count_words)})
+# You can pass any lambda function here
+
+final_chain = RunnableSequence(joke_chain,parallel_chain)
+
+print(final_chain.invoke({"topic":"India"}))
