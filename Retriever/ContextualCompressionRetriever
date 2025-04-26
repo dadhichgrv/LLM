@@ -1,0 +1,57 @@
+from langchain.schema import Document
+from langchain_community.vectorstores import FAISS
+from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import LLMChainExtractor
+
+all_documents = [
+        Document(
+            page_content="Rising global temperatures due to greenhouse gas emissions pose significant threats to ecosystems and human settlements worldwide. Photosynthsis is the process of making food by plants",
+            metadata={"topic": "global warming", "doc_id": "doc1"}
+        ),
+        Document(
+            page_content="Eating green vegetables is good for balanced diet. The chlorophyll in plants is used for photosynthesis",
+            metadata={"topic": "global warming", "doc_id": "doc2"}
+        ),
+        Document(
+            page_content="Regular physical activity combined with balanced nutrition significantly reduces the risk of cardiovascular disease and improves mental wellbeing. Photosynthsis does not occur in animals",
+            metadata={"topic": "health and lifestyle", "doc_id": "doc3"}
+        ),
+        Document(
+            page_content="Mindfulness practices and adequate sleep are essential components of stress management in today's fast-paced digital environment.",
+            metadata={"topic": "health and lifestyle", "doc_id": "doc4"}
+        ),
+        Document(
+            page_content="The solar energy system in homes keeps balanced electricity demand",
+            metadata={"topic": "health and lifestyle", "doc_id": "doc5"}
+        )
+]
+
+
+faiss_index = FAISS.from_documents(all_documents, embeddings)
+
+base_retriever = faiss_index.as_retriever(search_type="similarity",
+                                     search_kwargs={"k":2})               
+
+compressor = LLMChainExtractor.from_llm(llm=client)
+
+contextual_retriever = ContextualCompressionRetriever(
+                                         base_compressor=compressor, 
+                                         base_retriever = base_retriever)
+                                         
+
+base_result = base_retriever.invoke("Tell me about Photosynthesis?")         
+
+print("Result for retriver \n ")
+for i, doc in enumerate(base_result):
+  print("Result ",i+1)
+  print(doc.page_content)
+
+
+contextual_result = contextual_retriever.invoke("Tell me about Photosynthesis?")         
+
+print("\n Result for contextual retriver \n ")
+for i, doc in enumerate(contextual_result):
+  print("Result ",i+1)
+  print(doc.page_content)
+
