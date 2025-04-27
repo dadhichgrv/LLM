@@ -1,0 +1,30 @@
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+
+def get_youtube_transcript(video_id):
+    """
+    Retrieve the transcript of a YouTube video.
+    
+    Args:
+        video_id (str): The YouTube video ID (the part after ?v= in the URL)
+        
+    Returns:
+        str: The full transcript text
+    """
+    try:
+        # Get the list of transcript dictionaries
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id,languages=['en'])
+        
+        # Combine all text parts into one string
+        transcript_text = ' '.join([item['text'] for item in transcript_list])
+        
+        return transcript_text
+    
+    except TranscriptsDisabled:
+        print(f"Transcripts are disabled for this video: {video_id}")
+        return None
+    except NoTranscriptFound:
+        print(f"No transcript found for this video: {video_id}")
+        return None
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return None
