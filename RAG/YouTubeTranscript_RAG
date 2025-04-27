@@ -1,0 +1,50 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import FAISS 
+from langchain.embeddings import AzureOpenAIEmbeddings
+from langchain.schema.runnable import RunnableParallel, RunnableLambda, RunnablePassthrough
+
+# Create Parser
+parser = StrOutputParser()
+
+# Here I am not able to call YouTube API to generate transcript so manually getting transcript
+
+transcrip = """ Put your transcript here """
+
+# Split the transcript into chunks
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+chunks = text_splitter.create_documents([transcript])
+
+# Create Prompt Template
+prompt_template = PromptTemplate(
+    input_variables=["query","text"],
+    template="""You are a helpful assistant. Answer only from the context provided. If the context is insufficient, they say don't know.
+              Answer the questions {query}  based on given text: {text}
+              """)
+
+# Create embeddings and store them
+faiss_index = FAISS.from_documents(documents = chunks, 
+                                  embedding=embeddings)
+
+# Create retriever
+retriever = faiss_index.as_retriever(search_type="mmr",
+                                     search_kwargs={"k":2})
+
+def create_context(retrieved_documents):
+  return "\n\n".join([doc.page_content for doc in retrieved_documents])
+
+# The query will be passed to the retriever and the retriever will return the relevant documents
+# Also the query will pass as is
+parallel_chain = RunnableParallel({"query"  : RunnablePassthrough(), 
+                                   "text"   : retriever | RunnableLambda(create_context)})
+
+# The parallel chain will have query and text as input to the prompt template as it needs 2 inputs.
+# It will then pass to LLM and then to parser
+final_chain = parallel_chain | prompt_template | client | parser 
+
+# Ask query
+query = "When should be buy gold"
+final_chain.invoke(query)
+
+                      
