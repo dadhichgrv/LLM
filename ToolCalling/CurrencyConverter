@@ -1,0 +1,58 @@
+from langchain_core.tools import tool, InjectedToolArg 
+from typing import Annotated 
+from langchain_core.messages import HumanMessage 
+import requests, json
+
+# THis tool will fetch current currency conversion by hitting this api. I have signed up to get this api key
+@tool
+def get_conversion_factor(base_currency: str, target_currency: str) -> float:
+    """
+    This function fetches the currency conversion factor between given base_currency and target_currency.
+    """
+    url = f"https://v6.exchangerate-api.com/v6/dddb91bf205ee72995bbc707/pair/{base_currency}/{target_currency}"
+    response = requests.get(url)
+    return response.json()
+
+# This tool will use that conversion rate and calculate for given currency value
+@tool
+def convert(base_currency_value: int, conversion_rate: Annotated[float,InjectedToolArg]) -> float:
+  """ Given a currency conversion rate this function calculates target currency value from given base currency value   """
+  return base_currency_value * conversion_rate 
+
+# Bind the tools
+client_with_two_tools = client.bind_tools([get_conversion_factor, convert])
+client_with_two_tools.kwargs
+
+# Human Query
+query = HumanMessage("What is conversion rate between usd and inr and how much is 10 usd in inr")
+messages = [query]
+print(messages)
+
+# Use tool to get AI Message
+ai_message = client_with_two_tools.invoke(messages)
+print(ai_message.tool_calls)
+
+# Append ai message to messages
+messages.append(ai_message) 
+print(messages)
+
+# Execute the tools
+for tool_call in ai_message.tool_calls:
+  # Execute the 1st tool and get conversion rate
+  if tool_call['name']=="get_conversion_factor":
+    tool_message_1 = get_conversion_factor.invoke(tool_call)
+  # tool_message_1 is json so getting value of conversion rate from it by loading json and then fetching conversion rate
+    conversion_rate = json.loads(tool_message_1.content)['conversion_rate']
+  # append this message
+    messages.append(tool_message_1)  
+
+  if tool_call['name']=="convert":
+    # fetch conversion rate from above if part and inject it to the conversion_rate of convert tool
+    tool_call['args']['conversion_rate'] = conversion_rate
+    # Now execute 2nd tool
+    tool_message_2 = convert.invoke(tool_call)
+    # append messages
+    messages.append(tool_message_2)  
+
+print(client_with_two_tools.invoke(messages).content)
+   
