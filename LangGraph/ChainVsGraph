@@ -1,0 +1,125 @@
+# Given a topic, generate outline then create a blog and evaluate blog based on outline on a scale of 1 to 10
+
+########################################### LANG CHAIN ############################################################
+# Langchain simple code to chain outputs
+# Direct Chaining
+# Here i only have final output and everything in between is lost
+
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
+
+def client_oai(input_text):
+    # Convert input to string in case LangChain passes a dict or custom object
+    if not isinstance(input_text, str):
+        input_text = str(input_text)
+        
+    response = client.chat.completions.create(
+        model="o4-mini",
+        messages=[
+            {"role": "system", "content": "You are an AI assistant that performs tasks based on the given prompt."},
+            {"role": "user", "content": input_text}
+        ]
+    )
+    return response.choices[0].message.content
+
+prompt1 = PromptTemplate(input_variables=["topic"], 
+                         template="Give me a short outline of {topic}")
+
+prompt2 = PromptTemplate(input_variables=["outline"], 
+                         template="Generate blog from {outline}")
+
+prompt3 = PromptTemplate(
+    input_variables=["blog"],
+    template="Evaluate the blog {blog}  against the outline. "
+             "Return a score between 1 and 10."
+)
+
+output_parser = StrOutputParser()
+
+# --- Define the chain ---
+chain1 = prompt1 | client_oai | output_parser | prompt2 | client_oai | output_parser | prompt3 | client_oai | output_parser
+
+result = chain1.invoke({"topic": "Mahatama Gandhi"})
+print(result)
+
+
+################################ LANG GRAPH ##################################################################
+
+# Using LangGraph Workflow
+# Here we can store the intermediate state values also
+# Prompt Chaining
+
+class LLMBlogState(TypedDict):
+  title: str
+  outline: str   
+  blog: str
+  score: int
+
+def llm_topic_outline(state:LLMBlogState) -> LLMBlogState:
+  title = state["title"] 
+  response = client.chat.completions.create(model="o4-mini",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt. Generate short outline on given {title} "},
+                                                  
+                                                    {"role": "user",
+                                                      "content": title }
+                                                          ]
+                                                )
+  state["outline"] = response.choices[0].message.content
+  return state
+
+def llm_outline_blog(state:LLMBlogState) -> LLMBlogState:
+  title = state["title"]
+  outline = state["outline"] 
+  response = client.chat.completions.create(model="o4-mini",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt. Generate short blog on given title {title} using given outline {outline} "},
+                                                  
+                                                    {"role": "user",
+                                                      "content": outline }
+                                                          ]
+                                                )
+  state["blog"] = response.choices[0].message.content
+  return state  
+
+def llm_rate_blog(state:LLMBlogState) -> LLMBlogState:
+  title = state["title"]
+  outline = state["outline"] 
+  blog = state["blog"]
+  response = client.chat.completions.create(model="o4-mini",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt. Evaluate the blog {blog} which is written on given title {title} based on outline {outline}. Rate it on scale of 1 to 10 "},
+                                                  
+                                                    {"role": "user",
+                                                      "content": blog }
+                                                          ]
+                                                )
+  state["score"] = response.choices[0].message.content
+  return state    
+    
+# Create a graph
+graph = StateGraph(LLMBlogState)
+
+# Add Nodes
+graph.add_node("llm_topic_outline",llm_topic_outline)
+graph.add_node("llm_outline_blog",llm_outline_blog)
+graph.add_node("llm_rate_blog",llm_rate_blog)
+
+# Add Edges
+graph.add_edge(START,"llm_topic_outline")
+graph.add_edge("llm_topic_outline","llm_outline_blog")
+graph.add_edge("llm_outline_blog","llm_rate_blog")
+graph.add_edge("llm_rate_blog",END)
+
+# Create Workflow by compiling the graph
+workflow = graph.compile()
+
+input_state = {"title":"Mahatama Gandhi"}
+output_state = workflow.invoke(input_state) # Here output_state has intermediate states also 
+print(output_state['score'])
+
+
