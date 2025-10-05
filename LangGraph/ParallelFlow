@@ -1,0 +1,160 @@
+##########
+## We need to give topic on which LLM will generate outline and then write essay based on that outline
+## Then we will evaluate that essay on 3 things - clarity of thought, depth of analysis, language quality through text and a score
+## Finally based on these 3 feedbacks we will generate final evaluation and calculate avg score
+## We will store individual scores in a list
+## Input is topic and output is feedback along with avg score
+
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict, Annotated
+from pydantic import BaseModel, Field
+import operator
+
+from langchain_openai import AzureChatOpenAI
+
+# I need feedback and score which is int. It can be possible that LLM will give seven instead of 7 so to avoid that I am using structured output using BaseModel
+
+client_oai = AzureChatOpenAI(
+   model="model_name",
+   api_version="****",
+   azure_endpoint="****",
+   temperature = 0,  
+   azure_ad_token_provider=****
+)
+
+############################################ STRUCTURED OUTPUT CLASS ##################################################################
+# Since we need feedback and score both so we are creating a structured output so that we can get text and int in a structure
+class EvaluationSchema(BaseModel):
+  feedback : str = Field(description="Detailed feedback for the essay")
+  score: int = Field(description="Score between 1 to 10", ge=1, le=10)
+
+structured_output = client_oai.with_structured_output(EvaluationSchema)
+
+####################################################### WORKFLOW CLASS ################################################################
+# Create workflow by defining state of workflow
+
+class EssayState(TypedDict):
+  topic: str
+  outline: str
+  essay: str
+
+  cot_feedback: str
+  doa_feedback: str
+  lang_feedback: str
+  
+  individual_scores: Annotated[list[int], operator.add] 
+  # Taking all the indiv scores into a list , operator.add will help us add the scores ( it is reducer function)
+  # We are merging all scores into this list 
+
+  final_feedback: str
+  avg_score: float 
+
+
+
+def generate_outline(state:EssayState):
+  topic = state["topic"]
+  prompt = (
+        f"Given topic: {topic}\n"
+        f"Generate outline for the essay"
+           )
+  
+  response = client.chat.completions.create(model="o4-mini",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt."},
+                                                  
+                                                    {"role": "user",
+                                                      "content": prompt } # this prompt shud be string always
+                                                          ]
+                                                )
+  outline = response.choices[0].message.content
+  return {"outline":outline}  
+
+
+def generate_essay(state:EssayState):
+  outline = state["outline"]
+  prompt = (
+        f"Given outline: {outline}\n"
+        f"Generate essay based on the outine"
+           )
+  
+  response = client.chat.completions.create(model="o4-mini",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt."},
+                                                  
+                                                    {"role": "user",
+                                                      "content": prompt } # this prompt shud be string always
+                                                          ]
+                                                )
+  essay = response.choices[0].message.content
+  return {"essay":essay}    
+
+def evaluate_cot(state:EssayState):
+  essay = state["essay"]
+  prompt = f"Evaluate essay on clarity of thought and provide feedback and calculate score between 1 to 10 {essay}"
+  response = structured_output.invoke(prompt)
+  return {"cot_feedback":response.feedback, "individual_scores":[response.score]}     
+
+
+def evaluate_doa(state:EssayState):
+  essay = state["essay"]
+  prompt = f"Evaluate essay on Depth of Analysis and provide feedback and calculate score between 1 to 10 {essay}"
+  response = structured_output.invoke(prompt)
+  return {"doa_feedback":response.feedback, "individual_scores":[response.score]} 
+
+def evaluate_language(state:EssayState):
+  essay = state["essay"]
+  prompt = f"Evaluate essay on Quality of Language and provide feedback and calculate score between 1 to 10 {essay}"
+  return {"lang_feedback":response.feedback, "individual_scores":[response.score]}  
+
+
+def final_feedback(state:EssayState):
+  lang_feedback = state["lang_feedback"]
+  doa_feedback = state["doa_feedback"]
+  cot_feedback = state["cot_feedback"]
+  prompt = (
+        f"Given language feedback: {lang_feedback}\n "
+        f"Given depth of analysis feedback: {doa_feedback}\n "
+        f"Given clarity of thought feedback: {cot_feedback}\n"
+        f"Generate summarised feedback"
+           )
+  
+
+  final_feedback = client_oai.invoke(prompt).content
+  
+  # Calculate avg score
+  avg_score = sum(state["individual_scores"])/len(state["individual_scores"])
+  return {"final_feedback":final_feedback, "avg_score":avg_score}   
+
+# DEFINE GRAPH
+graph = StateGraph(EssayState)
+
+# ADD NODES
+graph.add_node("generate_outline",generate_outline)
+graph.add_node("generate_essay",generate_essay)
+graph.add_node("evaluate_cot",evaluate_cot)
+graph.add_node("evaluate_doa",evaluate_doa)
+graph.add_node("evaluate_language",evaluate_language)
+graph.add_node("final_feedback",final_feedback)
+
+# Add Edges
+graph.add_edge(START,"generate_outline")
+graph.add_edge("generate_outline", "generate_essay")
+
+graph.add_edge("generate_essay","evaluate_cot")
+graph.add_edge("generate_essay","evaluate_doa")
+graph.add_edge("generate_essay","evaluate_language")
+
+graph.add_edge("evaluate_cot","final_feedback")
+graph.add_edge("evaluate_doa","final_feedback")
+graph.add_edge("evaluate_language","final_feedback")
+
+graph.add_edge("final_feedback",END)
+
+essay_workflow = graph.compile()
+essay_workflow  
+
+input_state = {"topic":"Rise of AI"}
+output_state = essay_workflow.invoke(input_state)
+print(output_state)
