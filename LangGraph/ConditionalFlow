@@ -1,0 +1,116 @@
+## This is about review for which we are sending thank you message if it is positive else diagnose the sentiment and send resolution message to the customer
+
+########################################################################################################
+# Define schema for sentiment analysis task. It can be either positive or negative
+class ReviewSentiment(BaseModel):
+  sentiment: Literal["positive","negative"] = Field(description="Sentiment of the review")
+
+structured_output_review = client_oai.with_structured_output(ReviewSentiment)  
+
+
+# Define schema for sentiment analysis task. It can be either positive or negative
+class DiagnoseSchema(BaseModel):
+  issue_type: Literal["UX","Performance","Quality",'Other'] = Field(description="Issue in the review")
+  tone : Literal["angry","frustrated","calm","disappointed","other"] = Field(description="Tone of the review")
+  urgency : Literal["low","medium","high"] = Field(description="How urgent is the issue")
+
+structured_output_diagnose = client_oai.with_structured_output(DiagnoseSchema)  
+########################################################################################################
+
+# Create Review State for the graph
+class ReviewState(TypedDict):
+  review: str
+  sentiment_score: Literal["positive","negative"]
+  diagnosis: dict
+  seller_response: str 
+
+# Create function to find sentiment of the review
+def find_sentiment(state:ReviewState):
+  review = state["review"]
+  prompt = f"Based on the review given by the customer, find the sentiment of the review. \n Review: {review}"
+  response = structured_output_review.invoke(prompt)
+  return {"sentiment_score":response.sentiment}
+
+# Add Check on the sentiment
+def check_sentiment(state:ReviewState) -> Literal["generate_positive_response","run_diagnosis"]:
+  sentiment_score = state["sentiment_score"]
+  if sentiment_score=="positive":
+    return "generate_positive_response"
+  else:
+    return "run_diagnosis"
+
+# Generate Positive Response
+def generate_positive_response(state:ReviewState):
+  review = state["review"]
+  prompt = (
+        f"Based on the positive review by the customer: {review}\n"
+        f"Generate Thank you message to the customer"
+           )
+  
+  response = client.chat.completions.create(model="***",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt."},
+                                                  
+                                                    {"role": "user",
+                                                      "content": prompt } # this prompt shud be string always
+                                                          ]
+                                                )
+  seller_response = response.choices[0].message.content
+  return {"seller_response":seller_response}    
+
+
+# Run Diagnosis on negative feedback
+def run_diagnosis(state:ReviewState):
+  review = state["review"]
+  prompt = (
+        f"Diagnose this review by the customer: {review}\n"
+        f"Return Issue Type, Tone and Urgency"
+           )
+
+  response = structured_output_diagnose.invoke(prompt)
+  return {"diagnosis":response.model_dump()}  
+
+# Generate response to the customer based on diagnosis  
+def generate_negative_response(state:ReviewState):
+  review = state["review"]
+  diagnosis = state["diagnosis"]
+
+  prompt = (
+        f"""Based on the negative review by the customer: {review}\n. The user had urgency {diagnosis["urgency"]} and tone {diagnosis["tone"]} and the issue is {diagnosis["issue_type"]}.
+        Generate helful resolution message to the customer"""
+           )
+  
+  response = client.chat.completions.create(model="***",
+                                                messages=[
+                                                  {"role": "system",
+                                                   "content": "You are an AI assistant that performs task based on the given prompt."},
+                                                  
+                                                    {"role": "user",
+                                                      "content": prompt } # this prompt shud be string always
+                                                          ]
+                                                )
+  seller_response = response.choices[0].message.content
+  return {"seller_response":seller_response}   
+
+
+# Create Graph
+graph = StateGraph(ReviewState)
+graph.add_node("find_sentiment",find_sentiment)
+graph.add_node("generate_positive_response",generate_positive_response)
+graph.add_node("generate_negative_response",generate_negative_response)
+graph.add_node("run_diagnosis",run_diagnosis)
+
+graph.add_edge(START,"find_sentiment")
+graph.add_conditional_edges("find_sentiment",check_sentiment)
+graph.add_edge("generate_positive_response",END)
+graph.add_edge("run_diagnosis","generate_negative_response")
+graph.add_edge("generate_negative_response",END)
+
+
+review_workflow = graph.compile()
+review_workflow
+
+input_state = {"review":"The product is poor"}
+output_state = review_workflow.invoke(input_state)
+print(output_state)
