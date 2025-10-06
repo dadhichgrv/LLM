@@ -1,0 +1,110 @@
+# state
+import operator
+
+# Define state
+class PostState(TypedDict):
+  topic: str
+  post: str
+  evaluation: Literal["approved","needs_improvement"]
+  feedback: str 
+  iteration: int
+  max_iteration: int 
+  post_history: Annotated[list[str], operator.add]  # to store history of all the posts
+  feedback_history: Annotated[list[str], operator.add]  # to store historical feedbacks
+
+####################################################################################################################
+class evaluation_schema(BaseModel):
+  evaluation: Literal["approved","needs_improvement"] = Field(description="Evaluation of the post")
+  feedback: str = Field(description="Feedback on the post")
+
+structured_output_evaluation = client_oai.with_structured_output(evaluation_schema)
+#####################################################################################################################
+
+# Function to generate post
+def generate_post(state:PostState):
+  topic = state["topic"]
+  prompt = [
+      SystemMessage(content="You are an experienced interior designer who is updated with industry."),
+      HumanMessage(content=f"""
+                   Write a post on the topic: {topic} that is insightful and interactive and engaging in 100 words. 
+                   
+    Rules:
+    - Do not use question answer format
+                   """)
+  ]
+        
+  response = client_oai.invoke(prompt).content
+  return {"post":response, "post_history":[response]}    
+
+# Function to evaluate the post
+def evaluate_post(state:PostState):
+  topic = state["topic"]
+  post = state["post"]
+  prompt = [
+    SystemMessage(content="You are a critic with expertise in making post on social media."),
+    HumanMessage(content=f"""
+    Based on the given topic: {topic} and post : {post}  
+    Evaluate the post on below criterion:
+        1. Originality - Is this fresh or have you see it hundred times before
+        2. Virality Potent - Will people share it with others
+        3. Format - Is it well-formed post 
+    Auto Reject if:
+    - It is written in question answer format like "Why did" or "What happened"
+    - It exceeds 100 characters
+    - It is not original, not engaging, not interactive, not well-formed, not interactive, not engaging, not interactive, not engaging
+
+  ### Respond only in structured format
+  evaluation: <approved/needs_improvement>
+  feedback: <feedback>
+"""
+    )
+           ]
+  response = structured_output_evaluation.invoke(prompt)                                                
+  return {"evaluation":response.evaluation, "feedback":response.feedback, "feedback_history":[response.feedback]}    
+
+# Function to check if post is approved or not
+def check_evaluation(state:PostState):
+  evaluation = state["evaluation"]
+  iteration = state["iteration"]
+  max_iteration = state["max_iteration"]
+  if evaluation == "approved" or iteration > max_iteration: 
+    return "approved"
+  else:
+    return "needs_improvement"
+  
+
+def optimise_post(state:PostState):
+  topic = state["topic"]
+  post = state["post"]
+  feedback = state["feedback"]
+  prompt = [
+    SystemMessage(content="You write posts for virality based on given feedback."),
+    HumanMessage(content=f"""Improve the post based on the feedback {feedback} for the topic {topic}.
+                 Original post: {post}
+                 Re-write it as short and viral-worthy post. Avoid Q&A style and stay under 100 words""")
+  ]
+
+
+  response = client_oai.invoke(prompt).content
+  iteration = state['iteration'] + 1
+  return {"post":response,"iteration":iteration,"post_history":[response]}   
+
+  
+# Add Graph
+graph = StateGraph(PostState)  
+
+graph.add_node("generate_post",generate_post)
+graph.add_node("evaluate_post",evaluate_post)
+graph.add_node("optimise",optimise_post)
+
+graph.add_edge(START,"generate_post")
+graph.add_edge("generate_post","evaluate_post")
+graph.add_conditional_edges("evaluate_post",check_evaluation,{"approved":END,"needs_improvement":"optimise"})
+graph.add_edge("optimise","evaluate_post")
+
+post_workflow = graph.compile()
+post_workflow
+
+input_state = {"topic":"Interior Design", "iteration":1, "max_iteration":3}
+output_state = post_workflow.invoke(input_state)
+print(output_state)
