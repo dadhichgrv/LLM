@@ -1,0 +1,85 @@
+import os
+from typing import TypedDict, Annotated, List
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from langchain_openai import AzureChatOpenAI
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, RemoveMessage
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
+# Import START, END from langgraph
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+
+
+# Set token provider
+token_provider = get_bearer_token_provider(
+  DefaultAzureCredential(),"...")
+
+
+client_chat_oai = AzureChatOpenAI(   
+   model="...",
+   api_version="...",
+   azure_endpoint="...", 
+   azure_ad_token_provider=token_provider
+)
+  
+
+class ChatState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+
+# Trimming code
+def ChatNode(state: ChatState):
+    messages_trimmed = trim_messages(
+                            messages = state["messages"],
+                            strategy="last",
+                            token_counter = count_tokens_approximately,
+                            max_tokens = 100)
+    response = client_chat_oai.invoke(messages_trimmed)
+    return {"messages": [response]}
+
+graph = StateGraph(ChatState)
+
+graph.add_node("chatnode", ChatNode)
+
+graph.add_edge(START, "chatnode")
+graph.add_edge("chatnode", END)
+
+checkpointer = MemorySaver()
+
+workflow = graph.compile(checkpointer=checkpointer)
+
+thread_id = "chat_session_1"
+config = {"configurable": {"thread_id": thread_id}}
+
+workflow.invoke({"messages":"Hello"}, config=config)
+workflow.invoke({"messages":"My name is Gaurav"}, config=config)
+workflow.invoke({"messages":"I live in Hyderabad"}, config=config)
+print(workflow.invoke({"messages":"What is my name"}, config=config))
+
+# Print all messages in final state
+snap = workflow.get_state(config)
+vals = snap.values
+print("Final Messages in State:")
+for msg in vals.get("messages", []):
+    print(f"- {msg.content}")
+
+
+# Print all states in history
+states = list(workflow.get_state_history(config))
+for state in states:
+    print(state.next)
+    print(state.config["configurable"]["checkpoint_id"])
+    print()
+
+
+# Get one checkpoint
+print()
+print("Checkpoint ID")
+new_config = states[-6].config
+
+# Get the state at this checkpoint 
+# It will print all messages up to that checkpoint
+checkpoint_state = workflow.get_state(new_config)
+print("State at checkpoint:")
+print(checkpoint_state.values)
+print(f"Messages: {[msg.content for msg in checkpoint_state.values.get('messages', [])]}")
+
