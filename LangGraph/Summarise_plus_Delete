@@ -1,0 +1,153 @@
+import os
+from typing import TypedDict, Annotated, List
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from langchain_openai import AzureChatOpenAI
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, RemoveMessage
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
+# Import START, END from langgraph
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+
+
+# Set token provider
+token_provider = get_bearer_token_provider(
+  DefaultAzureCredential(),"...")
+
+
+client_chat_oai = AzureChatOpenAI(   
+   model="...",
+   api_version="...",
+   azure_endpoint="...", 
+   azure_ad_token_provider=token_provider
+)
+  
+
+class ChatState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    summary: str
+
+def chat_node(state: ChatState) -> dict:
+    # Create empty list and add previous summary if exists and add it to messages
+    messages  = []
+    if state.get("summary"):  # Use .get() to avoid KeyError
+        messages.append(SystemMessage(content=f"Summary of previous conversation: {state['summary']}")) 
+                         
+                         
+    messages.extend(state["messages"])    
+
+    response = client_chat_oai.invoke(messages)
+    return {"messages": [response]}
+
+def summary_generator(state: ChatState):
+    existing_summary = state.get("summary", "")  # Use .get() to avoid KeyError
+    if existing_summary:
+        prompt = f"""Existing summary: {existing_summary}
+        
+                Extend the summary based on the following conversation messages. Be concise."""
+    else: 
+        prompt = f"""Generate a concise summary of the following conversation messages."""    
+
+    # Put prompt FIRST as system message, then conversation messages
+    messages_for_summary = [SystemMessage(content=prompt)] + state["messages"]
+
+    response = client_chat_oai.invoke(messages_for_summary)
+
+    messages_to_delete = state["messages"][:-2]
+    
+    
+    return {"summary": response.content,
+            "messages": [RemoveMessage(id=m.id) for m in messages_to_delete]}
+
+
+def should_summarize(state: ChatState) -> bool:
+    # Summarize if more than 5 messages
+    msg_count = len(state["messages"])
+    print(f"[DEBUG] should_summarize called - Message count: {msg_count}, Trigger: {msg_count > 5}")
+    return msg_count > 5
+
+# ==================== MEMORY CHECKPOINTER ====================
+checkpointer = MemorySaver()
+
+
+# ==================== CHATBOT GRAPH ====================
+ChatGraph = StateGraph(ChatState)
+ChatGraph.add_node("chat", chat_node)
+ChatGraph.add_node("summary", summary_generator)
+
+ChatGraph.add_edge(START, "chat")
+ChatGraph.add_conditional_edges("chat", should_summarize, {True: "summary", False: END})
+ChatGraph.add_edge("summary", END)
+
+# Compile with memory checkpointer
+chatbot = ChatGraph.compile(checkpointer=checkpointer)
+
+thread_id = "chat_session_1"
+config = {"configurable": {"thread_id": thread_id}}
+
+# Test messages to trigger summarization (need > 5 messages)
+test_messages = [
+    "My name is Gaurav",
+    "I work as a Data Scientist",
+    "I work in MSFT",
+    "My favorite programming language is Python",
+    "I live in Hyderabad",
+    "What is my Name?"  # This 6th message should trigger summary
+]
+
+print("=" * 60)
+print("TESTING SUMMARY GENERATION")
+print("Summary triggers when messages > 5")
+print("=" * 60)
+
+for i, msg in enumerate(test_messages, 1):
+    print(f"\n--- Message {i}: {msg} ---")
+    # Don't pass "summary" - let the checkpointer maintain it!
+    result = chatbot.invoke({"messages": [HumanMessage(content=msg)]}, config=config)
+    
+    # Get current state to check summary
+    snap = chatbot.get_state(config)
+    vals = snap.values
+    
+    print(f"Assistant: {result['messages'][-1].content}")
+    print(f"Message count: {len(vals.get('messages', []))}")
+    print(f"Message : {vals.get('messages', [])}")
+    print(f"Summary: {vals.get('summary', 'No summary yet')}")
+    print("-" * 40)
+
+
+# ==================== INTERACTIVE CHAT LOOP ====================
+# if __name__ == "__main__":
+#     # Thread ID for conversation persistence
+#     thread_id = "chat_session_1"
+#     config = {"configurable": {"thread_id": thread_id}}
+    
+#     print("=" * 60)
+#     print("CHATBOT (with 150 token memory)")
+#     print("=" * 60)
+#     print("Type 'quit' or 'exit' to end the conversation.")
+#     print("=" * 60)
+    
+#     while True:
+#         # Get user input
+#         user_input = input("\nYou: ").strip()
+        
+#         # Check for exit commands
+#         if user_input.lower() in ['quit', 'exit', 'q']:
+#             print("\nGoodbye!")
+#             break
+        
+#         if not user_input:
+#             print("Please enter a question.")
+#             continue
+        
+#         # Run the chatbot
+#         try:
+#             result = chatbot.invoke({"messages": [HumanMessage(content=user_input)], "summary": ""}, config=config)
+#             print(f"\nAssistant: {result['messages'][-1].content}")
+#         except Exception as e:
+#             print(f"\nError: {str(e)}")    
+
+
+
+# #################
