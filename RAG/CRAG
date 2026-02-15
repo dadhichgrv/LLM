@@ -1,0 +1,351 @@
+import os
+import re
+from typing import TypedDict, Annotated, List
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+from pydantic import BaseModel, Field
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import FAISS
+from langchain_community.tools import TavilySearchResults
+from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureOpenAIEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, RemoveMessage
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
+
+# Import START, END from langgraph
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.memory import InMemoryStore, BaseStore
+from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+
+# Set Tavily API key
+os.environ["TAVILY_API_KEY"] = "..."
+
+# Set token provider
+token_provider = get_bearer_token_provider(
+  DefaultAzureCredential(),".....")
+
+
+client_chat_oai = AzureChatOpenAI(   
+   model="...",
+   api_version="...",
+   azure_endpoint="...", 
+   azure_ad_token_provider=token_provider
+)
+  
+embeddings = AzureOpenAIEmbeddings(azure_deployment="...", 
+                                   azure_endpoint = "...",
+                                   azure_ad_token_provider = token_provider)  
+
+# Load the PDF docs (CRAG and RNN)
+crag_loader = PyPDFLoader('CRAG.pdf').load()
+rnn_loader = PyPDFLoader('RNN.pdf').load()
+
+docs = crag_loader + rnn_loader
+
+# Split documents into chunks
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+chunks = text_splitter.split_documents(docs)
+
+# Function to split text into sentences
+def split_text_into_sentences(text: str) -> List[str]:
+    """Split a text string into individual sentences"""
+    # Split by sentence-ending punctuation followed by space or end
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    # Filter and clean sentences
+    return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
+
+
+class KeeporDrop(BaseModel):
+    keep: bool
+
+class RelevanceScore(BaseModel):
+    score: float  # Score between 0 and 1
+    reason: str  # Explanation for the score
+
+# Prompt to keep or discard sentence within the document
+filter_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a helpful assistant that decides whether a sentence is relevant to the query and helps answer the query or not. If it is then return True else False.",),
+        ("human", "Sentence: {sentences} \n\n Query: {query} ")
+    ]
+)
+
+# Prompt to evaluate relevance of entire document to the query
+evaluator_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a relevance evaluator. Score how relevant the given document is to the query on a scale from 0 to 1, where 0 means completely irrelevant and 1 means highly relevant. Also provide a brief reason for your score.",),
+        ("human", "Document: {document} \n\n Query: {query} ")
+    ]
+)
+
+# Chain the prompt with structured output
+filter_chain = filter_prompt | client_chat_oai.with_structured_output(KeeporDrop)
+evaluator_chain = evaluator_prompt | client_chat_oai.with_structured_output(RelevanceScore)
+
+# Already chunked and stored so commneted out
+
+# Create FAISS vector store with embeddings
+#vector_store = FAISS.from_documents(chunks, embeddings)
+
+# Optional: Save the vector store locally for reuse
+#vector_store.save_local("faiss_index")
+
+# Load the vector store from local directory if needed
+vector_store = FAISS.load_local("faiss_index", embeddings,allow_dangerous_deserialization=True)
+
+# Create retriever to retrieve similar documents
+retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+
+# Define State
+class State(TypedDict):
+    query: str
+    rewritten_query: str  # Rewritten query for web search
+    docs: List[Document]
+    doc_scores: List[float]  # Scores for each document
+    filtered_docs: List[Document]  # Docs that pass upper threshold
+    verdict: str  # "Good" if all >= upper, "Bad" if all <= lower, "Ambiguous" otherwise
+    reason: str  # Explanation of why verdict was chosen
+    
+    sentences: List[str]
+    relevant_sentences: List[str]
+    relevant_context: str
+    web_results: list[Document]  # Results from web search
+    messages: Annotated[list[BaseMessage], add_messages]  # Messages for tool calling
+
+    answer: str
+
+# Thresholds for relevance
+UPPER_THRESHOLD = 0.7
+LOWER_THRESHOLD = 0.3
+
+# Tavily Search Tool instance
+web_search_tool = TavilySearchResults(max_results=3)
+
+# Web Search 
+def web_search(query: str) -> str:
+    """Search the web for information about the given query."""
+    search_results = web_search_tool.invoke(query)
+    
+    if search_results:
+        web_context = "\n\n".join([
+            f"Source: {result.get('url', 'N/A')}\nContent: {result.get('content', '')}" 
+            for result in search_results
+        ])
+    else:
+        web_context = "No web results found."
+    
+    return web_context
+
+
+# Define Retrieve Node
+def retrieve_node(state: State):
+    """Retrieve relevant documents based on query"""
+    query = state['query']
+    similar_docs = retriever.invoke(query)
+    return {"docs": similar_docs}
+
+# Define Evaluator Node
+def evaluator_node(state: State):
+    """Evaluate each document's relevance to the query and assign scores"""
+    query = state['query']
+    docs = state['docs']
+    
+    doc_scores = []
+    filtered_docs = []
+    reasons_info = []
+    
+    for i, doc in enumerate(docs):
+        response = evaluator_chain.invoke({"document": doc.page_content, "query": query})
+        score = max(0.0, min(1.0, response.score))  # Clamp between 0 and 1
+        doc_scores.append(score)
+        reasons_info.append(f"Doc {i+1} (score: {score:.2f}): {response.reason}")
+        
+        # Keep docs that pass the upper threshold for refinement
+        if score >= UPPER_THRESHOLD:
+            filtered_docs.append(doc)
+    
+    # Determine verdict based on document scores
+    any_above_upper = any(score >= UPPER_THRESHOLD for score in doc_scores) if doc_scores else False
+    all_below_lower = all(score <= LOWER_THRESHOLD for score in doc_scores) if doc_scores else True
+    
+    if any_above_upper:
+        verdict = "Good"
+        reason = f"{len(filtered_docs)} document(s) are highly relevant (score >= {UPPER_THRESHOLD}). Using only those docs. {'; '.join(reasons_info)}"
+    elif all_below_lower:
+        verdict = "Bad"
+        reason = f"All {len(docs)} document(s) are irrelevant (all scores <= {LOWER_THRESHOLD}). {'; '.join(reasons_info)}"
+    else:
+        verdict = "Ambiguous"
+        reason = f"No documents above upper threshold ({UPPER_THRESHOLD}), but not all below lower threshold ({LOWER_THRESHOLD}). {'; '.join(reasons_info)}"
+    
+    return {"doc_scores": doc_scores, "filtered_docs": filtered_docs, "verdict": verdict, "reason": reason}
+
+# Conditional routing based on verdict
+def route_after_evaluation(state: State):
+    """Route based on verdict: Good -> refine, Bad/Ambiguous -> rewrite_query"""
+    if state['verdict'] == "Good":
+        return "refine"
+    else:  # Bad or Ambiguous - both go through web search
+        return "rewrite_query"
+
+# Define Reject Node
+def reject_node(state: State):
+    """Return message when documents are not relevant enough"""
+    return {"answer": f"The retrieved documents are not relevant enough to answer the query. Verdict: {state['verdict']}. Reason: {state['reason']}"}
+
+# Define Rewrite Query Node
+def rewrite_query(state: State):
+    """Rewrite the user query to be more suitable for web search"""
+    query = state['query']
+    
+    prompt = f"""You are a query rewriter. Given the user's question, rewrite it to be a better search query for web search.
+Make it more specific and search-engine friendly. Return only the rewritten query, nothing else.
+
+Original question: {query}
+
+Rewritten search query:"""
+    
+    response = client_chat_oai.invoke([HumanMessage(content=prompt)])
+    rewritten = response.content.strip()
+    
+    return {"rewritten_query": rewritten}
+
+# Define Web Search Node
+def web_search_node(state: State):
+    """Perform web search and convert results to Documents for refinement"""
+    # Use rewritten query if available, otherwise use original query
+    query = state.get('rewritten_query') or state['query']
+    
+    # Call the web_search tool function directly
+    web_context = web_search(query)
+    
+    # Convert web results to Document objects
+    web_docs = [Document(page_content=web_context, metadata={"source": "web_search"})]
+    
+    # For Ambiguous verdict: combine existing filtered_docs with web_docs
+    # For Bad verdict: filtered_docs will be empty, so only web_docs are used
+    existing_filtered_docs = state.get('filtered_docs', [])
+    combined_docs = existing_filtered_docs + web_docs
+    
+    return {"filtered_docs": combined_docs, "web_results": web_context}
+
+def refine(state: State):
+    """Split filtered docs into sentences and filter by relevance"""
+    # Split filtered docs into sentences
+    sentences = []
+    for doc in state['filtered_docs']:
+        sentences.extend(split_text_into_sentences(doc.page_content))
+    
+    # Filter sentences using the filter chain
+    relevant_sentences = []
+    for sentence in sentences:
+        response = filter_chain.invoke({"sentences": sentence, "query": state['query']})
+        if response.keep:
+            relevant_sentences.append(sentence)
+    
+    # Merge relevant sentences into context
+    relevant_context = " ".join(relevant_sentences)
+    
+    return {"sentences": sentences, "relevant_sentences": relevant_sentences, "relevant_context": relevant_context}
+
+
+# Define Generate Node
+def generate(state: State):
+    relevant_context = state['relevant_context']
+    
+    if not relevant_context:
+        return {"answer": "No relevant information found to answer the query."}
+    
+    prompt = f"""Use the following context to answer the question. 
+If you cannot find the answer in the context, you can use the web_search tool to find more information.
+
+Question: {state['query']}
+Context: {relevant_context}
+
+"""
+    # Use llm_with_tools so it can call tools if needed
+    response = client_chat_oai.invoke([HumanMessage(content=prompt)])
+    
+    # If response has tool_calls, we need to return messages for the tool_node to process
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        return {"messages": [response]}
+    
+    return {"answer": response.content, "messages": [response]}    
+
+
+graph = StateGraph(State)
+graph.add_node("retrieve", retrieve_node)
+graph.add_node("evaluator", evaluator_node)
+graph.add_node("refine", refine)
+graph.add_node("rewrite_query", rewrite_query)
+graph.add_node("web_search", web_search_node)
+graph.add_node("generate", generate)
+
+graph.add_edge(START, "retrieve")
+graph.add_edge("retrieve", "evaluator")
+graph.add_conditional_edges("evaluator", route_after_evaluation, {
+    "refine": "refine", 
+    "rewrite_query": "rewrite_query"
+})
+graph.add_edge("refine", "generate")
+graph.add_edge("rewrite_query", "web_search")
+graph.add_edge("web_search", "refine")
+graph.add_edge("generate", END)
+
+workflow = graph.compile()
+
+# Save workflow diagram
+try:
+    # Get the graph diagram as PNG using mermaid
+    diagram = workflow.get_graph().draw_mermaid_png()
+    with open("workflow_diagram.png", "wb") as f:
+        f.write(diagram)
+    print("Workflow diagram saved as 'workflow_diagram.png'")
+except Exception as e:
+    print(f"Could not save diagram: {e}")
+    # Alternative: Save as mermaid text
+    mermaid_text = workflow.get_graph().draw_mermaid()
+    with open("workflow_diagram.md", "w") as f:
+        f.write(f"```mermaid\n{mermaid_text}\n```")
+    print("Workflow diagram saved as 'workflow_diagram.md' (mermaid format)")
+
+response = workflow.invoke({"query": "GRU vs LSTM", "rewritten_query": "", "docs": [], "doc_scores": [], "filtered_docs": [], "verdict": "", "reason": "", "sentences": [], "relevant_sentences": [], "relevant_context": "", "web_results": "", "messages": [], "answer": ""})
+
+print("Docs: \n")
+print(response['docs'])
+
+print("\nDoc Scores: \n")
+print(response['doc_scores'])
+
+print("\nFiltered Docs (score >= 0.7): \n")
+print(response['filtered_docs'])
+
+print("\nVerdict: \n")
+print(response['verdict'])
+
+print("\nRewritten Query (for web search): \n")
+print(response['rewritten_query'])
+
+print("\nReason: \n")
+print(response['reason'])
+
+print("\nAll Sentences: \n")
+print(response['sentences'])
+
+print("\nRelevant Sentences (passed refinement): \n")
+print(response['relevant_sentences'])
+
+print("\nRelevant Context: \n")
+print(response['relevant_context'])
+
+print("\nAnswer: \n")
+print(response['answer'])
+    
