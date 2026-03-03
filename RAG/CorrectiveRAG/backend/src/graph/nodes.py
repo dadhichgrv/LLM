@@ -22,7 +22,7 @@ if not logger.handlers:
 
 token_provider = get_bearer_token_provider(DefaultAzureCredential(), os.getenv("TOKEN_PROVIDER"))
 # Set Tavily API key
-os.environ["TAVILY_API_KEY"] = "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"
+os.environ["TAVILY_API_KEY"] = "..."
 
 # Node to check if document retrieval is needed based on the query or not
 def is_retrieve_node(state:CRAGState):
@@ -271,5 +271,6 @@ Requirements:
     response = client_chat_oai.invoke(prompt)
     logger.info("[generate_answer_node] Answer generated. answer_chars=%d", len(response.content or ""))
     return {"answer": response.content}
+
 
   
