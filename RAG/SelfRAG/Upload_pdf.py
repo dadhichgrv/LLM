@@ -7,9 +7,9 @@ from azure.storage.blob import BlobServiceClient
 
 load_dotenv()
 
-ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "adlscsuplatformdev")
-CONTAINER_NAME = os.getenv("AZURE_BLOB_CONTAINER", "csudataplatform")
-BLOB_PREFIX = os.getenv("AZURE_BLOB_PREFIX", "staging/adhoc/Gaurav")
+ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "...")
+CONTAINER_NAME = os.getenv("AZURE_BLOB_CONTAINER", "...")
+BLOB_PREFIX = os.getenv("AZURE_BLOB_PREFIX", "...")
 LOCAL_PDF_DIR = Path(os.getenv("LOCAL_PDF_DIR", "backend/data"))
 
 
@@ -59,3 +59,4 @@ def upload_pdfs() -> None:
 
 if __name__ == "__main__":
     upload_pdfs()
+
