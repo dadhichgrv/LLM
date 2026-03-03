@@ -20,9 +20,9 @@ logger = logging.getLogger("indexer")
 
 def index_documents():
     # Read blob source configuration from environment.
-    account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "adlscsuplatformdev")
-    container_name = os.getenv("AZURE_BLOB_CONTAINER", "csudataplatform")
-    blob_prefix = os.getenv("AZURE_BLOB_PREFIX", "staging/adhoc/Gaurav")
+    account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "...")
+    container_name = os.getenv("AZURE_BLOB_CONTAINER", "...")
+    blob_prefix = os.getenv("AZURE_BLOB_PREFIX", "...")
     account_url = f"https://{account_name}.blob.core.windows.net"
     logger.info(f"Blob source configured: account={account_name}, container={container_name}, prefix={blob_prefix}")
     
@@ -101,6 +101,7 @@ def index_documents():
 
 if __name__ == "__main__":
     index_documents()                   
+
 
 
 
